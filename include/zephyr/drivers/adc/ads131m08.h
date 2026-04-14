@@ -29,8 +29,6 @@ extern "C" {
  * @{
  */
 
-#define ADS131M08_NUM_CHANNELS 8
-
 /**
  * @brief Channel input MUX selection
  */
@@ -59,7 +57,8 @@ struct ads131m08_channel_cal {
  * @brief Calibration data for all 8 channels
  */
 struct ads131m08_calibration {
-	struct ads131m08_channel_cal ch[ADS131M08_NUM_CHANNELS];
+	struct ads131m08_channel_cal
+		ch[ADS131M08_NUM_CHANNELS]; /**<  Per-channel calibration data */
 };
 
 /**

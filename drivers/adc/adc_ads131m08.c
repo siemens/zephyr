@@ -193,6 +193,9 @@ LOG_MODULE_REGISTER(adc_ads131m08, CONFIG_ADC_LOG_LEVEL);
 #define ADS131M08_WORDLENGTH_AFTER_RESET 3U /* 24-bit after reset */
 #define ADS131M08_FRAMELENGTH            (ADS131M08_WORDLENGTH_OP * ADS131M08_WORDS_PER_FRAME)
 
+/** Number of ADC channels on the ADS131M08 */
+#define ADS131M08_NUM_CHANNELS 8
+
 /** ADS131M08 device functional modes */
 enum ads131m08_functional_mode {
 	ADS131M08_CONTINUOUS_CONVERSION_FM = 0,
