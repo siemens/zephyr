@@ -326,6 +326,7 @@ static int ads131m08_reg_write_short(const struct device *dev, uint8_t addr, uin
 	uint16_t temp;
 	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+
 	__ASSERT(sizeof(tx_buf) == 40, "tx_buf size calculation error");
 	__ASSERT(sizeof(rx_buf) == 40, "rx_buf size calculation error");
 	temp = ads131m08_get_wreg(addr, 1);
@@ -340,6 +341,7 @@ static int ads131m08_reg_read_short(const struct device *dev, uint8_t addr, uint
 	uint16_t temp;
 	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+
 	__ASSERT(sizeof(tx_buf) == 40, "tx_buf size calculation error");
 	__ASSERT(sizeof(rx_buf) == 40, "rx_buf size calculation error");
 	int ret;
@@ -923,6 +925,7 @@ static void ads131m08_submit_stream(const struct device *dev, struct rtio_iodev_
 	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
 	const struct adc_read_config *read_config =
 		(const struct adc_read_config *)iodev_sqe->sqe.iodev->data;
+
 	/* Determine trigger mode from read config */
 	data->active_trigger = ADC_TRIG_DATA_READY; /* Default */
 	if (read_config != NULL && read_config->trigger_cnt > 0) {
@@ -1003,6 +1006,7 @@ static int ads131m08_decoder_decode(const uint8_t *buffer, uint32_t channel, uin
 {
 	const struct adc_ads131m08_fifo_data *enc_data =
 		(const struct adc_ads131m08_fifo_data *)buffer;
+
 	if (channel >= ADS131M08_ADC_CHANNELS) {
 		return -ENOTSUP;
 	}
@@ -1066,6 +1070,7 @@ static void ads131m08_process_sample_cb(struct rtio *r, const struct rtio_sqe *s
 	struct rtio_iodev_sqe *iodev_sqe = (struct rtio_iodev_sqe *)sqe->userdata;
 	const struct device *dev = (const struct device *)arg;
 	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
+
 	data->fifo_needs_drain = false;
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
 }
@@ -1075,7 +1080,6 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
 	const struct adc_ads131m08_config *cfg = (const struct adc_ads131m08_config *)dev->config;
 	struct rtio_iodev_sqe *current_sqe = data->sqe;
-
 	struct adc_read_config *read_config = NULL;
 
 	if (current_sqe == NULL) {
@@ -1237,21 +1241,26 @@ static int ads131m08_init_interrupt(const struct device *dev)
 }
 #endif
 
+/**
+ * @brief Configure the word length for the ADS131M08 ADC device.
+ *
+ * After reset the device uses 24-bit word length.
+ * This function switches to 32-bit sign-extended mode.
+ * @param dev Pointer to the ADS131M08 device structure.
+ *
+ * @return 0 on success, negative errno code on failure.
+ */
 static int ads131m08_configure_wlen(const struct device *dev)
 {
+
+	uint8_t tx_buf[ADS131M08_WORDLENGTH_AFTER_RESET * ADS131M08_WORDS_PER_FRAME] = {0};
+	uint16_t reg = ADS131M08_MODE_DEFAULT;
+	uint16_t cmd_word = ads131m08_get_wreg(ADS131M08_MODE_REG, 1);
 	int ret;
 
-	/*
-	 * After reset the device uses 24-bit word length. Build a 24-bit frame
-	 * to switch to 32-bit sign-extended mode before using the normal helpers.
-	 */
-	uint8_t tx_buf[ADS131M08_WORDLENGTH_AFTER_RESET * ADS131M08_WORDS_PER_FRAME] = {0};
 	__ASSERT(sizeof(tx_buf) == 30, "tx_buf size calculation error");
-
-	uint16_t cmd_word = ads131m08_get_wreg(ADS131M08_MODE_REG, 1);
 	__ASSERT(cmd_word == 0x6100, "cmd_word: 0x%04x does not match expected 0x6100", cmd_word);
 	sys_put_be16(cmd_word, tx_buf);
-	uint16_t reg = ADS131M08_MODE_DEFAULT;
 	reg &= ~ADS131M08_WLENGTH_MASK;
 	reg |= ADS131M08_WLENGTH_32BIT_SIGNED;
 	sys_put_be16(reg, &tx_buf[ADS131M08_WORDLENGTH_AFTER_RESET]);
@@ -1518,22 +1527,24 @@ static DEVICE_API(adc, ads131m08_api) = {
 	SPI_DT_IODEV_DEFINE(ads131m08_iodev_##inst, DT_DRV_INST(inst), ADS131M08_SPI_CFG);         \
 	RTIO_DEFINE(ads131m08_rtio_ctx_##inst, 16, 16);
 
-#define ADS131M08_INIT(n)                                                                          \
-	IF_ENABLED(CONFIG_ADS131M08_STREAM, (ADS131M08_RTIO_DEFINE(n)));                            \
-	static struct adc_ads131m08_data ads131m08_data_##n = {                                    \
-		IF_ENABLED(CONFIG_ADS131M08_STREAM,                                                    \
-                   (.rtio_ctx = &ads131m08_rtio_ctx_##n, .iodev = &ads131m08_iodev_##n))};                \
-                                                                                                   \
-	static const struct adc_ads131m08_config ads131m08_config_##n = {                          \
-		.spi = SPI_DT_SPEC_INST_GET(n,                                                     \
-					    SPI_OP_MODE_MASTER | SPI_MODE_CPHA | SPI_WORD_SET(8)), \
-		.gpio_reset = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                       \
-		.spec = ADC_DT_SPEC_STRUCT(DT_INST(n, DT_DRV_COMPAT), 0),                          \
-		IF_ENABLED(CONFIG_ADS131M08_TRIGGER,                                                   \
-                   (.gpio_drdy = GPIO_DT_SPEC_INST_GET(n, drdy_gpios), ))};                    \
-                                                                                                   \
-	DEVICE_DT_INST_DEFINE(n, ads131m08_init, NULL, &ads131m08_data_##n, &ads131m08_config_##n, \
-			      POST_KERNEL, CONFIG_ADC_INIT_PRIORITY, &ads131m08_api);
+/* clang-format off */
+#define ADS131M08_INIT(n)								\
+	IF_ENABLED(CONFIG_ADS131M08_STREAM, (ADS131M08_RTIO_DEFINE(n)));		\
+	static struct adc_ads131m08_data ads131m08_data_##n = {				\
+		IF_ENABLED(CONFIG_ADS131M08_STREAM,					\
+		(.rtio_ctx = &ads131m08_rtio_ctx_##n, 					\
+			.iodev = &ads131m08_iodev_##n))};				\
+											\
+	static const struct adc_ads131m08_config ads131m08_config_##n = {		\
+		.spi = SPI_DT_SPEC_INST_GET(n, ADS131M08_SPI_CFG),			\
+		.gpio_reset = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),		\
+		.spec = ADC_DT_SPEC_STRUCT(DT_INST(n, DT_DRV_COMPAT), 0),		\
+		IF_ENABLED(CONFIG_ADS131M08_TRIGGER,					\
+			(.gpio_drdy = GPIO_DT_SPEC_INST_GET(n, drdy_gpios),)) };	\
+	DEVICE_DT_INST_DEFINE(n, ads131m08_init, NULL, &ads131m08_data_##n, 		\
+		&ads131m08_config_##n, POST_KERNEL, 					\
+		CONFIG_ADC_INIT_PRIORITY, &ads131m08_api);
+/* clang-format on */
 
 #define DT_DRV_COMPAT ti_ads131m08
 
