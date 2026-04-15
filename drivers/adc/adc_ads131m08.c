@@ -270,13 +270,11 @@ static int ads131m08_transceive(const struct device *dev, uint8_t *send_buf,
 {
 	int ret;
 	const struct adc_ads131m08_config *cfg = dev->config;
-
 	const struct spi_buf tx_buf = {
 		.buf = send_buf,
 		.len = send_buf_len,
 	};
 	const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
-
 	struct spi_buf rx_buf = {
 		.buf = recv_buf,
 		.len = recv_buf_len,
@@ -293,8 +291,8 @@ static int ads131m08_transceive(const struct device *dev, uint8_t *send_buf,
 static int ads131m08_send_command(const struct device *dev, uint16_t cmd)
 {
 	int ret;
-	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 
 	sys_put_be16(cmd, tx_buf);
 	ret = ads131m08_transceive(dev, tx_buf, sizeof(tx_buf), rx_buf, sizeof(rx_buf));
@@ -317,6 +315,7 @@ static int ads131m08_wakeup(const struct device *dev)
 static uint16_t ads131m08_get_wreg(uint8_t addr, uint8_t n_to_write)
 {
 	const uint8_t n = n_to_write - 1;
+
 	/* WREG command word: 011a aaaa annn nnnn (address << 7 | n) */
 	return (uint16_t)(ADS131M08_WREG_CMD | (addr << 7) | (uint16_t)n);
 }
@@ -324,8 +323,8 @@ static uint16_t ads131m08_get_wreg(uint8_t addr, uint8_t n_to_write)
 static int ads131m08_reg_write_short(const struct device *dev, uint8_t addr, uint16_t val)
 {
 	uint16_t temp;
-	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 
 	__ASSERT(sizeof(tx_buf) == 40, "tx_buf size calculation error");
 	__ASSERT(sizeof(rx_buf) == 40, "rx_buf size calculation error");
@@ -338,13 +337,13 @@ static int ads131m08_reg_write_short(const struct device *dev, uint8_t addr, uin
 
 static int ads131m08_reg_read_short(const struct device *dev, uint8_t addr, uint16_t *buf)
 {
+	int ret;
 	uint16_t temp;
-	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 
 	__ASSERT(sizeof(tx_buf) == 40, "tx_buf size calculation error");
 	__ASSERT(sizeof(rx_buf) == 40, "rx_buf size calculation error");
-	int ret;
 	temp = (uint16_t)(ADS131M08_RREG_CMD | (addr << 7));
 	sys_put_be16(temp, tx_buf);
 	ret = ads131m08_transceive(dev, tx_buf, sizeof(tx_buf), rx_buf, sizeof(rx_buf));
@@ -377,8 +376,8 @@ static int ads131m08_reg_update_bits(const struct device *dev, uint8_t addr, uin
 static int ads131m08_init_reset(const struct device *dev)
 {
 	const struct adc_ads131m08_config *cfg = dev->config;
-	struct adc_ads131m08_data *drv_data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *drv_data = dev->data;
 
 	if (!gpio_is_ready_dt(&cfg->gpio_reset)) {
 		LOG_ERR("GPIO port %s not ready", cfg->gpio_reset.port->name);
@@ -445,19 +444,21 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 		CONTAINER_OF(cb, struct adc_ads131m08_data, gpio_drdy_cb);
 
 #ifdef CONFIG_ADS131M08_STREAM
+	bool need_double_read;
+	const struct adc_read_config *cfg_adc;
 
 	if (drv_data->sqe == NULL) {
 		k_sem_give(&drv_data->sem_drdy);
 		return;
 	}
 
-	const struct adc_read_config *cfg_adc = drv_data->sqe->sqe.iodev->data;
+	cfg_adc = drv_data->sqe->sqe.iodev->data;
 	if (!cfg_adc->is_streaming) {
 		k_sem_give(&drv_data->sem_drdy);
 		return;
 	}
 	if (drv_data->active_trigger == ADC_TRIG_DATA_READY) {
-		bool need_double_read = drv_data->fifo_needs_drain;
+		need_double_read = drv_data->fifo_needs_drain;
 		ads131m08_stream_irq_handler(drv_data->dev, need_double_read);
 	} else if (drv_data->active_trigger == ADC_TRIG_FIFO_FULL) {
 		/* FIFO_FULL mode: wait for 2 samples, then read both */
@@ -467,7 +468,7 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 			return;
 		}
 		drv_data->drdy_pending = 0;
-		bool need_double_read = true;
+		need_double_read = true;
 		ads131m08_stream_irq_handler(drv_data->dev, need_double_read);
 	}
 
@@ -480,7 +481,13 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
+	const uint8_t *src_bytes;
+	const uint8_t n_ch;
+	int32_t *dst;
 	struct adc_ads131m08_data *data = CONTAINER_OF(ctx, struct adc_ads131m08_data, ctx);
+	uint8_t i = 0;
+	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
+	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
 
 	data->channels = ctx->sequence.channels;
 	data->repeat_buffer = data->buffer;
@@ -491,14 +498,11 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 	}
 #endif
 	__ASSERT(ADS131M08_WORDLENGTH_OP == 4U, "Word length other than 32bit not supported yet");
-	uint8_t tx_buf[ADS131M08_FRAMELENGTH] = {0};
-	uint8_t rx_buf[ADS131M08_FRAMELENGTH] = {0};
 	ads131m08_transceive(data->dev, tx_buf, sizeof(tx_buf), rx_buf, sizeof(rx_buf));
 
-	const uint8_t n_ch = POPCOUNT(ctx->sequence.channels);
-	int32_t *dst = ((int32_t *)ctx->sequence.buffer) + ctx->sampling_index * n_ch;
-	const uint8_t *src_bytes = &rx_buf[ADS131M08_WORDLENGTH_OP];
-	uint8_t i = 0;
+	n_ch = POPCOUNT(ctx->sequence.channels);
+	dst = ((int32_t *)ctx->sequence.buffer) + ctx->sampling_index * n_ch;
+	src_bytes = &rx_buf[ADS131M08_WORDLENGTH_OP];
 
 	for (uint8_t ch = 0; ch < ADS131M08_ADC_CHANNELS; ch++) {
 		if ((data->channels & (1 << ch)) != 0) {
@@ -523,8 +527,8 @@ static void adc_context_update_buffer_pointer(struct adc_context *ctx, bool repe
 static int ads131m08_validate_buffer_size(const struct device *dev,
 					  const struct adc_sequence *sequence)
 {
-	uint8_t channels;
 	size_t needed;
+	uint8_t channels;
 
 	channels = POPCOUNT(sequence->channels);
 	needed = channels * sizeof(int32_t);
@@ -539,8 +543,8 @@ static int ads131m08_validate_buffer_size(const struct device *dev,
 static int ads131m08_set_operation_mode(const struct device *dev,
 					enum ads131m08_functional_mode operation_mode)
 {
-	struct adc_ads131m08_data *data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *data = dev->data;
 
 	if (data->operation_mode == ADS131M08_CONTINUOUS_CONVERSION_FM) {
 		switch (operation_mode) {
@@ -764,8 +768,8 @@ static int ads131m08_set_operation_mode(const struct device *dev,
 static int ads131m08_start_read(const struct device *dev, const struct adc_sequence *sequence)
 {
 	const struct adc_ads131m08_config *cfg = dev->config;
-	struct adc_ads131m08_data *data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *data = dev->data;
 
 	if (sequence->resolution != cfg->spec.resolution) {
 		return -EINVAL;
@@ -781,15 +785,14 @@ static int ads131m08_start_read(const struct device *dev, const struct adc_seque
 
 	data->buffer = sequence->buffer;
 	adc_context_start_read(&data->ctx, sequence);
-
 	return adc_context_wait_for_completion(&data->ctx);
 }
 
 static int ads131m08_read_async(const struct device *dev, const struct adc_sequence *sequence,
 				struct k_poll_signal *async)
 {
-	struct adc_ads131m08_data *data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *data = dev->data;
 
 	adc_context_lock(&data->ctx, async ? true : false, async);
 	ret = ads131m08_start_read(dev, sequence);
@@ -808,6 +811,9 @@ static int ads131m08_channel_setup(const struct device *dev,
 {
 	const struct adc_ads131m08_config *cfg = dev->config;
 	int ret;
+	uint16_t gain_reg;
+	uint16_t mask;
+	uint16_t val;
 
 	if (channel_cfg->channel_id < 0 || channel_cfg->channel_id > 7) {
 		LOG_ERR("invalid channel id %d", channel_cfg->channel_id);
@@ -828,9 +834,6 @@ static int ads131m08_channel_setup(const struct device *dev,
 		return -EINVAL;
 	}
 
-	uint16_t mask;
-	uint16_t val;
-	uint16_t gain_reg;
 	if (channel_cfg->channel_id < 4) {
 		gain_reg = ADS131M08_GAIN_REG_0TO3;
 	} else {
@@ -943,10 +946,8 @@ static void ads131m08_submit_stream(const struct device *dev, struct rtio_iodev_
 static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_mode,
 				  uint16_t vref_mv, uint8_t adc_shift, uint8_t wlen)
 {
-	int32_t data_in = 0;
 	const uint32_t resolution = ADS131M08_RESOLUTION;
-	/* Scale is the number of codes (excluding sign bit in differential) */
-	const uint64_t scale = 1ULL << (resolution - (diff_mode ? 1 : 0));
+	int32_t data_in;
 
 	/* Read 24-bit sample and sign-extend when needed */
 	switch (wlen) {
@@ -968,6 +969,8 @@ static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_
 		data_in |= (int32_t)~BIT_MASK(resolution);
 	}
 
+	/* Scale is the number of codes (excluding sign bit in differential) */
+	const uint64_t scale = 1ULL << (resolution - (diff_mode ? 1 : 0));
 	/* Compute Q31 value safely:
 	 * out = (2^(31-adc_shift)) * (Vref / scale) * data_in
 	 * where Vref is in volts; we use mV and divide by 1000 accordingly.
@@ -980,8 +983,8 @@ static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_
 		*out = 0;
 		return;
 	}
-
 	const int64_t result = numerator / denominator;
+
 	*out = (q31_t)result;
 }
 
@@ -1006,6 +1009,9 @@ static int ads131m08_decoder_decode(const uint8_t *buffer, uint32_t channel, uin
 {
 	const struct adc_ads131m08_fifo_data *enc_data =
 		(const struct adc_ads131m08_fifo_data *)buffer;
+	struct adc_data *data;
+	uint16_t frames_to_decode;
+	uint32_t frame_idx;
 
 	if (channel >= ADS131M08_ADC_CHANNELS) {
 		return -ENOTSUP;
@@ -1017,7 +1023,7 @@ static int ads131m08_decoder_decode(const uint8_t *buffer, uint32_t channel, uin
 		return -ENOTSUP;
 	}
 
-	struct adc_data *data = (struct adc_data *)data_out;
+	data = (struct adc_data *)data_out;
 	memset(data, 0, sizeof(struct adc_data));
 
 	if (enc_data->empty) {
@@ -1036,13 +1042,14 @@ static int ads131m08_decoder_decode(const uint8_t *buffer, uint32_t channel, uin
 	data->shift = 32 - __builtin_clz(enc_data->vref_mv);
 
 	/* Decode remaining frames up to max_count */
-	uint16_t frames_to_decode = MIN(total_frames - *fit, max_count);
+	frames_to_decode = MIN(total_frames - *fit, max_count);
 	__ASSERT(frames_to_decode <= 2, "Can only decode up to 2 frames from FIFO data");
 	data->header.reading_count = frames_to_decode;
 
 	for (uint16_t i = 0; i < frames_to_decode; i++) {
-		uint32_t frame_idx = *fit + i;
+		frame_idx = *fit + i;
 		const uint8_t *sample_ptr;
+
 		__ASSERT(frame_idx < 2, "Invalid frame index for FIFO data");
 		if (frame_idx == 0) {
 			sample_ptr = (const uint8_t *)&enc_data->sample_be[channel];
@@ -1067,9 +1074,9 @@ static void ads131m08_process_sample_cb(struct rtio *r, const struct rtio_sqe *s
 					void *arg)
 {
 	ARG_UNUSED(r);
-	struct rtio_iodev_sqe *iodev_sqe = (struct rtio_iodev_sqe *)sqe->userdata;
 	const struct device *dev = (const struct device *)arg;
 	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
+	struct rtio_iodev_sqe *iodev_sqe = (struct rtio_iodev_sqe *)sqe->userdata;
 
 	data->fifo_needs_drain = false;
 	rtio_iodev_sqe_ok(iodev_sqe, 0);
@@ -1077,10 +1084,17 @@ static void ads131m08_process_sample_cb(struct rtio *r, const struct rtio_sqe *s
 
 static void ads131m08_stream_irq_handler(const struct device *dev, bool double_read)
 {
-	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
 	const struct adc_ads131m08_config *cfg = (const struct adc_ads131m08_config *)dev->config;
-	struct rtio_iodev_sqe *current_sqe = data->sqe;
+	enum adc_stream_data_opt data_opt;
+	struct adc_ads131m08_data *data = (struct adc_ads131m08_data *)dev->data;
+	struct adc_ads131m08_fifo_data *hdr;
 	struct adc_read_config *read_config = NULL;
+	struct rtio_iodev_sqe *current_sqe = data->sqe;
+	struct rtio_sqe *complete_op;
+	struct rtio_sqe *read_sample0;
+	struct rtio_sqe *read_sample1;
+	uint32_t buf_len;
+	uint8_t *buf;
 
 	if (current_sqe == NULL) {
 		return;
@@ -1098,9 +1112,6 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 
 	const size_t min_read_size = sizeof(struct adc_ads131m08_fifo_data);
 
-	uint8_t *buf;
-	uint32_t buf_len;
-
 	if (rtio_sqe_rx_buf(current_sqe, min_read_size, min_read_size, &buf, &buf_len) != 0) {
 		rtio_iodev_sqe_err(current_sqe, -ENOMEM);
 		return;
@@ -1109,8 +1120,7 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 	__ASSERT(buf_len >= sizeof(struct adc_ads131m08_fifo_data), "Buffer too small");
 
 	/* Read FIFO and call back to rtio with rtio_sqe completion */
-	struct adc_ads131m08_fifo_data *hdr = (struct adc_ads131m08_fifo_data *)buf;
-
+	hdr = (struct adc_ads131m08_fifo_data *)buf;
 	hdr->is_fifo = 1;
 	hdr->wlen = ADS131M08_WORDLENGTH_OP;
 	hdr->timestamp = data->timestamp;
@@ -1125,7 +1135,7 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 
 	/* Set empty flag if trigger opt is NOP or DROP */
 	if (read_config != NULL && read_config->trigger_cnt != 0) {
-		enum adc_stream_data_opt data_opt = read_config->triggers[0].opt;
+		data_opt = read_config->triggers[0].opt;
 
 		for (int i = 1; i < read_config->trigger_cnt; i++) {
 			data_opt = MIN(data_opt, read_config->triggers[i].opt);
@@ -1137,7 +1147,7 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 	}
 
 	/* Setup RTIO chain: Enqueue one or two SPI transactions, depending on double_read */
-	struct rtio_sqe *read_sample0 = rtio_sqe_acquire(data->rtio_ctx);
+	read_sample0 = rtio_sqe_acquire(data->rtio_ctx);
 
 	if (read_sample0 == NULL) {
 		rtio_iodev_sqe_err(current_sqe, -ENOMEM);
@@ -1148,7 +1158,7 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 			   ADS131M08_FRAMELENGTH, current_sqe);
 	read_sample0->flags = RTIO_SQE_CHAINED;
 	if (double_read) {
-		struct rtio_sqe *read_sample1 = rtio_sqe_acquire(data->rtio_ctx);
+		read_sample1 = rtio_sqe_acquire(data->rtio_ctx);
 		if (read_sample1 == NULL) {
 			rtio_sqe_drop_all(data->rtio_ctx);
 			rtio_iodev_sqe_err(current_sqe, -ENOMEM);
@@ -1158,13 +1168,14 @@ static void ads131m08_stream_irq_handler(const struct device *dev, bool double_r
 				   (uint8_t *)&hdr->status_1, ADS131M08_FRAMELENGTH, current_sqe);
 		read_sample1->flags = RTIO_SQE_CHAINED;
 	}
-	struct rtio_sqe *complete_op = rtio_sqe_acquire(data->rtio_ctx);
+	complete_op = rtio_sqe_acquire(data->rtio_ctx);
 	if (complete_op == NULL) {
 		rtio_sqe_drop_all(data->rtio_ctx);
 		rtio_iodev_sqe_err(current_sqe, -ENOMEM);
 		return;
 	}
-	rtio_sqe_prep_callback(complete_op, ads131m08_process_sample_cb, (void *)dev, current_sqe);
+	rtio_sqe_prep_callback(complete_op, ads131m08_process_sample_cb, (void *)(uintptr_t)dev,
+			       current_sqe);
 	rtio_submit(data->rtio_ctx, 0);
 }
 
@@ -1209,8 +1220,8 @@ static int ads131m08_get_decoder(const struct device *dev, const struct adc_deco
 static int ads131m08_init_interrupt(const struct device *dev)
 {
 	const struct adc_ads131m08_config *cfg = dev->config;
-	struct adc_ads131m08_data *drv_data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *drv_data = dev->data;
 
 	if (!gpio_is_ready_dt(&cfg->gpio_drdy)) {
 		LOG_ERR("GPIO port %s not ready", cfg->gpio_drdy.port->name);
@@ -1253,10 +1264,10 @@ static int ads131m08_init_interrupt(const struct device *dev)
 static int ads131m08_configure_wlen(const struct device *dev)
 {
 
-	uint8_t tx_buf[ADS131M08_WORDLENGTH_AFTER_RESET * ADS131M08_WORDS_PER_FRAME] = {0};
-	uint16_t reg = ADS131M08_MODE_DEFAULT;
-	uint16_t cmd_word = ads131m08_get_wreg(ADS131M08_MODE_REG, 1);
 	int ret;
+	uint16_t cmd_word = ads131m08_get_wreg(ADS131M08_MODE_REG, 1);
+	uint16_t reg = ADS131M08_MODE_DEFAULT;
+	uint8_t tx_buf[ADS131M08_WORDLENGTH_AFTER_RESET * ADS131M08_WORDS_PER_FRAME] = {0};
 
 	__ASSERT(sizeof(tx_buf) == 30, "tx_buf size calculation error");
 	__ASSERT(cmd_word == 0x6100, "cmd_word: 0x%04x does not match expected 0x6100", cmd_word);
@@ -1276,9 +1287,11 @@ static int ads131m08_configure_wlen(const struct device *dev)
 static int ads131m08_init(const struct device *dev)
 {
 	const struct adc_ads131m08_config *cfg = dev->config;
-	struct adc_ads131m08_data *data = dev->data;
 	int ret;
+	struct adc_ads131m08_data *data = dev->data;
 	uint16_t buf = 0;
+	uint8_t device_id;
+	uint8_t expected_id;
 
 	if (!spi_is_ready_dt(&cfg->spi)) {
 		LOG_ERR("SPI is not ready");
@@ -1315,8 +1328,8 @@ static int ads131m08_init(const struct device *dev)
 		return ret;
 	}
 
-	uint8_t device_id = (buf >> 8) & 0xFF;
-	uint8_t expected_id = ADS131M08_DEVICE_ID;
+	device_id = (buf >> 8) & 0xFF;
+	expected_id = ADS131M08_DEVICE_ID;
 	if (device_id != expected_id) {
 		LOG_ERR("Device ID mismatch 0x%02x is not equal to expected 0x%02x", device_id,
 			(uint8_t)ADS131M08_DEVICE_ID);
@@ -1393,22 +1406,25 @@ int ads131m08_set_calibration(const struct device *dev, const struct ads131m08_c
 	const uint8_t BUFSIZE = ADS131M08_WORDLENGTH_OP + ADS131M08_WORDLENGTH_OP *
 								  REGISTERS_PER_CHANNEL *
 								  ADS131M08_ADC_CHANNELS;
+	uint16_t cfg_reg;
+	uint16_t cmd_word;
+	uint8_t buf_idx;
 	uint8_t send_buf[BUFSIZE];
+
 	__ASSERT(sizeof(send_buf) == 164,
 		 "Miscalculation of send buffer size for calibration data");
 	memset(send_buf, 0, sizeof(send_buf));
 
-	uint16_t cmd_word = ads131m08_get_wreg(ADS131M08_CH0_CFG_REG,
-					       REGISTERS_PER_CHANNEL * ADS131M08_ADC_CHANNELS);
-
+	cmd_word = ads131m08_get_wreg(ADS131M08_CH0_CFG_REG,
+				      REGISTERS_PER_CHANNEL * ADS131M08_ADC_CHANNELS);
 	sys_put_be16(cmd_word, send_buf);
-	uint8_t buf_idx = ADS131M08_WORDLENGTH_OP;
+	buf_idx = ADS131M08_WORDLENGTH_OP;
 	for (int ch = 0; ch < ADS131M08_ADC_CHANNELS; ch++) {
 		const struct ads131m08_channel_cal *ch_cal = &cal->ch[ch];
 
 		/* CHX_CFG: PHASE[15:6], DCBLK_DIS[2], MUX[1:0] */
-		uint16_t cfg_reg = ((ch_cal->phase & 0x3FF) << 6) |
-				   ((ch_cal->dcblk_dis & 0x1) << 2) | (ch_cal->mux & 0x3);
+		cfg_reg = ((ch_cal->phase & 0x3FF) << 6) | ((ch_cal->dcblk_dis & 0x1) << 2) |
+			  (ch_cal->mux & 0x3);
 		send_buf[buf_idx++] = (cfg_reg >> 8) & 0xFF;
 		send_buf[buf_idx++] = cfg_reg & 0xFF;
 		send_buf[buf_idx++] = 0x00;
@@ -1449,6 +1465,7 @@ int ads131m08_get_calibration(const struct device *dev, struct ads131m08_calibra
 {
 	__ASSERT(ADS131M08_WORDLENGTH_OP == 4U, "Only 32-bit mode supported for calibration");
 	int ret;
+	struct ads131m08_channel_cal *ch_cal;
 	uint16_t reg_val;
 
 	/* Channel register base addresses: 5 consecutive registers per channel */
@@ -1459,11 +1476,10 @@ int ads131m08_get_calibration(const struct device *dev, struct ads131m08_calibra
 	};
 
 	for (int ch = 0; ch < ADS131M08_ADC_CHANNELS; ch++) {
-		struct ads131m08_channel_cal *ch_cal = &cal->ch[ch];
+		ch_cal = &cal->ch[ch];
 		const uint8_t base = ch_base_addr[ch];
 
-		/* CHX_CFG Register (16-bit): [PHASE[9:0], reserved[1:0], DCBLK_DIS, reserved,
-		 * MUX[1:0]] */
+		/* CHX_CFG Register */
 		ret = ads131m08_reg_read_short(dev, base, &reg_val);
 		if (ret != 0) {
 			return ret;
@@ -1472,14 +1488,14 @@ int ads131m08_get_calibration(const struct device *dev, struct ads131m08_calibra
 		ch_cal->dcblk_dis = (reg_val >> 2) & 0x1;
 		ch_cal->mux = reg_val & 0x3;
 
-		/* CHX_OCAL_MSB Register (16-bit): offset[23:8] */
+		/* CHX_OCAL_MSB Register */
 		ret = ads131m08_reg_read_short(dev, base + 1, &reg_val);
 		if (ret != 0) {
 			return ret;
 		}
 		ch_cal->offset = (int32_t)((uint32_t)reg_val << 8);
 
-		/* CHX_OCAL_LSB Register (16-bit): offset[7:0] in upper byte, lower byte reserved */
+		/* CHX_OCAL_LSB Register */
 		ret = ads131m08_reg_read_short(dev, base + 2, &reg_val);
 		if (ret != 0) {
 			return ret;
@@ -1490,14 +1506,14 @@ int ads131m08_get_calibration(const struct device *dev, struct ads131m08_calibra
 			ch_cal->offset |= (int32_t)0xFF000000;
 		}
 
-		/* CHX_GCAL_MSB Register (16-bit): gain[23:8] */
+		/* CHX_GCAL_MSB Register */
 		ret = ads131m08_reg_read_short(dev, base + 3, &reg_val);
 		if (ret != 0) {
 			return ret;
 		}
 		ch_cal->gain = (uint32_t)reg_val << 8;
 
-		/* CHX_GCAL_LSB Register (16-bit): gain[7:0] in upper byte, lower byte reserved */
+		/* CHX_GCAL_LSB Register */
 		ret = ads131m08_reg_read_short(dev, base + 4, &reg_val);
 		if (ret != 0) {
 			return ret;
@@ -1532,7 +1548,7 @@ static DEVICE_API(adc, ads131m08_api) = {
 	IF_ENABLED(CONFIG_ADS131M08_STREAM, (ADS131M08_RTIO_DEFINE(n)));		\
 	static struct adc_ads131m08_data ads131m08_data_##n = {				\
 		IF_ENABLED(CONFIG_ADS131M08_STREAM,					\
-		(.rtio_ctx = &ads131m08_rtio_ctx_##n, 					\
+		(.rtio_ctx = &ads131m08_rtio_ctx_##n,					\
 			.iodev = &ads131m08_iodev_##n))};				\
 											\
 	static const struct adc_ads131m08_config ads131m08_config_##n = {		\
@@ -1541,8 +1557,8 @@ static DEVICE_API(adc, ads131m08_api) = {
 		.spec = ADC_DT_SPEC_STRUCT(DT_INST(n, DT_DRV_COMPAT), 0),		\
 		IF_ENABLED(CONFIG_ADS131M08_TRIGGER,					\
 			(.gpio_drdy = GPIO_DT_SPEC_INST_GET(n, drdy_gpios),)) };	\
-	DEVICE_DT_INST_DEFINE(n, ads131m08_init, NULL, &ads131m08_data_##n, 		\
-		&ads131m08_config_##n, POST_KERNEL, 					\
+	DEVICE_DT_INST_DEFINE(n, ads131m08_init, NULL, &ads131m08_data_##n,		\
+		&ads131m08_config_##n, POST_KERNEL,					\
 		CONFIG_ADC_INIT_PRIORITY, &ads131m08_api);
 /* clang-format on */
 
