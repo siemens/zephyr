@@ -561,7 +561,8 @@ static int ads131m08_disable_global_chop(const struct device *dev)
 }
 
 /* Transition to CURRENT_DETECT_FM via standby then sync pulse.
- * On partial failure (standby ok, sync fails), records intermediate STANDBY_FM state. */
+ * On partial failure (standby ok, sync fails), records intermediate STANDBY_FM state.
+ */
 static int ads131m08_standby_then_sync(const struct device *dev)
 {
 	struct adc_ads131m08_data *data = dev->data;
@@ -579,7 +580,8 @@ static int ads131m08_standby_then_sync(const struct device *dev)
 }
 
 /* Transition from CURRENT_DETECT_FM via reset then standby.
- * On partial failure (reset ok, standby fails), records intermediate RESET_FM state. */
+ * On partial failure (reset ok, standby fails), records intermediate RESET_FM state.
+ */
 static int ads131m08_reset_then_standby(const struct device *dev)
 {
 	struct adc_ads131m08_data *data = dev->data;
@@ -597,7 +599,8 @@ static int ads131m08_reset_then_standby(const struct device *dev)
 }
 
 /* Transition from CURRENT_DETECT_FM via reset then enable global chop.
- * On partial failure (reset ok, reg update fails), records intermediate RESET_FM state. */
+ * On partial failure (reset ok, reg update fails), records intermediate RESET_FM state.
+ */
 static int ads131m08_reset_then_enable_global_chop(const struct device *dev)
 {
 	struct adc_ads131m08_data *data = dev->data;
@@ -967,7 +970,8 @@ static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_
 	/* Compute Q31 value safely:
 	 * out = (2^(31-adc_shift)) * (Vref / scale) * data_in
 	 * where Vref is in volts; we use mV and divide by 1000 accordingly.
-	 * The operation is ordered to avoid overflow and precision loss. */
+	 * The operation is ordered to avoid overflow and precision loss.
+	 */
 	int64_t qscale = (int64_t)(1ULL << (31 - adc_shift));
 	const int64_t numerator = (int64_t)data_in * (int64_t)vref_mv * qscale; /* mV scaled */
 	const int64_t denominator = (int64_t)scale * 1000; /* convert mV to V */
