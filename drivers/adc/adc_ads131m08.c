@@ -314,7 +314,7 @@ static int ads131m08_wakeup(const struct device *dev)
 
 static uint16_t ads131m08_get_wreg(uint8_t addr, uint8_t n_to_write)
 {
-	const uint8_t n = n_to_write - 1;
+	const uint8_t n = n_to_write - 1U;
 
 	/* WREG command word: 011a aaaa annn nnnn (address << 7 | n) */
 	return (uint16_t)(ADS131M08_WREG_CMD | (addr << 7) | (uint16_t)n);
@@ -540,226 +540,211 @@ static int ads131m08_validate_buffer_size(const struct device *dev,
 	return 0;
 }
 
+static int ads131m08_enable_global_chop(const struct device *dev)
+{
+	return ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG, ADS131M08_GC_MODE_MASK,
+					 ADS131M08_GLOBAL_CHOP_EN);
+}
+
+static int ads131m08_disable_global_chop(const struct device *dev)
+{
+	return ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG, ADS131M08_GC_MODE_MASK,
+					 ~((uint16_t)ADS131M08_GLOBAL_CHOP_EN));
+}
+
+/* Transition to CURRENT_DETECT_FM via standby then sync pulse.
+ * On partial failure (standby ok, sync fails), records intermediate STANDBY_FM state. */
+static int ads131m08_standby_then_sync(const struct device *dev)
+{
+	struct adc_ads131m08_data *data = dev->data;
+	int ret;
+
+	ret = ads131m08_standby(dev);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = ads131m08_sync_gpio(dev);
+	if (ret != 0) {
+		data->operation_mode = ADS131M08_STANDBY_FM;
+	}
+	return ret;
+}
+
+/* Transition from CURRENT_DETECT_FM via reset then standby.
+ * On partial failure (reset ok, standby fails), records intermediate RESET_FM state. */
+static int ads131m08_reset_then_standby(const struct device *dev)
+{
+	struct adc_ads131m08_data *data = dev->data;
+	int ret;
+
+	ret = ads131m08_reset_gpio(dev);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = ads131m08_standby(dev);
+	if (ret != 0) {
+		data->operation_mode = ADS131M08_RESET_FM;
+	}
+	return ret;
+}
+
+/* Transition from CURRENT_DETECT_FM via reset then enable global chop.
+ * On partial failure (reset ok, reg update fails), records intermediate RESET_FM state. */
+static int ads131m08_reset_then_enable_global_chop(const struct device *dev)
+{
+	struct adc_ads131m08_data *data = dev->data;
+	int ret;
+
+	ret = ads131m08_reset_gpio(dev);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = ads131m08_enable_global_chop(dev);
+	if (ret != 0) {
+		data->operation_mode = ADS131M08_RESET_FM;
+	}
+	return ret;
+}
+
+static int ads131m08_transition_from_continuous(const struct device *dev,
+						enum ads131m08_functional_mode operation_mode)
+{
+	switch (operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		return 0;
+	case ADS131M08_GLOBAL_CHOP_FM:
+		return ads131m08_enable_global_chop(dev);
+	case ADS131M08_STANDBY_FM:
+		return ads131m08_standby(dev);
+	case ADS131M08_CURRENT_DETECT_FM:
+		return ads131m08_standby_then_sync(dev);
+	case ADS131M08_RESET_FM:
+		return ads131m08_reset_gpio(dev);
+	default:
+		LOG_ERR("Invalid operating mode!");
+		return -EINVAL;
+	}
+}
+
+static int ads131m08_transition_from_global_chop(const struct device *dev,
+						  enum ads131m08_functional_mode operation_mode)
+{
+	switch (operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		return ads131m08_disable_global_chop(dev);
+	case ADS131M08_GLOBAL_CHOP_FM:
+		return 0;
+	case ADS131M08_STANDBY_FM:
+		return ads131m08_standby(dev);
+	case ADS131M08_CURRENT_DETECT_FM:
+		return ads131m08_standby_then_sync(dev);
+	case ADS131M08_RESET_FM:
+		return ads131m08_reset_gpio(dev);
+	default:
+		LOG_ERR("Invalid operating mode!");
+		return -EINVAL;
+	}
+}
+
+static int ads131m08_transition_from_standby(const struct device *dev,
+					     enum ads131m08_functional_mode operation_mode)
+{
+	int ret;
+
+	switch (operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		ret = ads131m08_wakeup(dev);
+		if (ret != 0) {
+			return ret;
+		}
+		return ads131m08_disable_global_chop(dev);
+	case ADS131M08_GLOBAL_CHOP_FM:
+		ret = ads131m08_wakeup(dev);
+		if (ret != 0) {
+			return ret;
+		}
+		return ads131m08_enable_global_chop(dev);
+	case ADS131M08_STANDBY_FM:
+		return 0;
+	case ADS131M08_CURRENT_DETECT_FM:
+		return ads131m08_sync_gpio(dev);
+	case ADS131M08_RESET_FM:
+		return ads131m08_reset_gpio(dev);
+	default:
+		LOG_ERR("Invalid operating mode!");
+		return -EINVAL;
+	}
+}
+
+static int ads131m08_transition_from_current_detect(const struct device *dev,
+						    enum ads131m08_functional_mode operation_mode)
+{
+	switch (operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		return ads131m08_reset_gpio(dev);
+	case ADS131M08_GLOBAL_CHOP_FM:
+		return ads131m08_reset_then_enable_global_chop(dev);
+	case ADS131M08_STANDBY_FM:
+		return ads131m08_reset_then_standby(dev);
+	case ADS131M08_CURRENT_DETECT_FM:
+		return 0;
+	case ADS131M08_RESET_FM:
+		return ads131m08_reset_gpio(dev);
+	default:
+		LOG_ERR("Invalid operating mode!");
+		return -EINVAL;
+	}
+}
+
+static int ads131m08_transition_from_reset(const struct device *dev,
+					   enum ads131m08_functional_mode operation_mode)
+{
+	switch (operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		return 0;
+	case ADS131M08_GLOBAL_CHOP_FM:
+		return ads131m08_enable_global_chop(dev);
+	case ADS131M08_STANDBY_FM:
+		return ads131m08_standby(dev);
+	case ADS131M08_CURRENT_DETECT_FM:
+		return ads131m08_standby_then_sync(dev);
+	case ADS131M08_RESET_FM:
+		return 0;
+	default:
+		LOG_ERR("Invalid operating mode!");
+		return -EINVAL;
+	}
+}
+
 static int ads131m08_set_operation_mode(const struct device *dev,
 					enum ads131m08_functional_mode operation_mode)
 {
-	int ret;
 	struct adc_ads131m08_data *data = dev->data;
+	int ret;
 
-	if (data->operation_mode == ADS131M08_CONTINUOUS_CONVERSION_FM) {
-		switch (operation_mode) {
-		case (ADS131M08_CONTINUOUS_CONVERSION_FM): {
-			break;
-		}
-		case (ADS131M08_GLOBAL_CHOP_FM): {
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							ADS131M08_GLOBAL_CHOP_EN);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_STANDBY_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_CURRENT_DETECT_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_sync_gpio(dev);
-			if (ret != 0) {
-				data->operation_mode = ADS131M08_STANDBY_FM;
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_RESET_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		}
-	} else if (data->operation_mode == ADS131M08_GLOBAL_CHOP_FM) {
-		switch (operation_mode) {
-		case (ADS131M08_CONTINUOUS_CONVERSION_FM): {
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							~((uint16_t)ADS131M08_GLOBAL_CHOP_EN));
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_GLOBAL_CHOP_FM): {
-			break;
-		}
-		case (ADS131M08_STANDBY_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_CURRENT_DETECT_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_sync_gpio(dev);
-			if (ret != 0) {
-				data->operation_mode = ADS131M08_STANDBY_FM;
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_RESET_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		}
-	} else if (data->operation_mode == ADS131M08_STANDBY_FM) {
-		switch (operation_mode) {
-		case (ADS131M08_CONTINUOUS_CONVERSION_FM): {
-			ret = ads131m08_wakeup(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							~((uint16_t)ADS131M08_GLOBAL_CHOP_EN));
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_GLOBAL_CHOP_FM): {
-			ret = ads131m08_wakeup(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							ADS131M08_GLOBAL_CHOP_EN);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_STANDBY_FM): {
-			break;
-		}
-		case (ADS131M08_CURRENT_DETECT_FM): {
-			ret = ads131m08_sync_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_RESET_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		}
-	} else if (data->operation_mode == ADS131M08_CURRENT_DETECT_FM) {
-		switch (operation_mode) {
-		case (ADS131M08_CONTINUOUS_CONVERSION_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_GLOBAL_CHOP_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							ADS131M08_GLOBAL_CHOP_EN);
-			if (ret != 0) {
-				data->operation_mode = ADS131M08_RESET_FM;
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_STANDBY_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				data->operation_mode = ADS131M08_RESET_FM;
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_CURRENT_DETECT_FM): {
-			break;
-		}
-		case (ADS131M08_RESET_FM): {
-			ret = ads131m08_reset_gpio(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		}
-	} else if (data->operation_mode == ADS131M08_RESET_FM) {
-		switch (operation_mode) {
-		case (ADS131M08_CONTINUOUS_CONVERSION_FM): {
-			break;
-		}
-		case (ADS131M08_STANDBY_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_CURRENT_DETECT_FM): {
-			ret = ads131m08_standby(dev);
-			if (ret != 0) {
-				return ret;
-			}
-			ret = ads131m08_sync_gpio(dev);
-			if (ret != 0) {
-				data->operation_mode = ADS131M08_STANDBY_FM;
-				return ret;
-			}
-			break;
-		}
-		case (ADS131M08_RESET_FM): {
-			break;
-		}
-		case (ADS131M08_GLOBAL_CHOP_FM): {
-			ret = ads131m08_reg_update_bits(dev, ADS131M08_CFG_REG,
-							ADS131M08_GC_MODE_MASK,
-							ADS131M08_GLOBAL_CHOP_EN);
-			if (ret != 0) {
-				return ret;
-			}
-			break;
-		}
-		}
-	} else {
+	switch (data->operation_mode) {
+	case ADS131M08_CONTINUOUS_CONVERSION_FM:
+		ret = ads131m08_transition_from_continuous(dev, operation_mode);
+		break;
+	case ADS131M08_GLOBAL_CHOP_FM:
+		ret = ads131m08_transition_from_global_chop(dev, operation_mode);
+		break;
+	case ADS131M08_STANDBY_FM:
+		ret = ads131m08_transition_from_standby(dev, operation_mode);
+		break;
+	case ADS131M08_CURRENT_DETECT_FM:
+		ret = ads131m08_transition_from_current_detect(dev, operation_mode);
+		break;
+	case ADS131M08_RESET_FM:
+		ret = ads131m08_transition_from_reset(dev, operation_mode);
+		break;
+	default:
 		LOG_ERR("Invalid operating mode!");
 		return -EINVAL;
+	}
+
+	if (ret != 0) {
+		return ret;
 	}
 	data->operation_mode = operation_mode;
 	return 0;
@@ -815,7 +800,7 @@ static int ads131m08_channel_setup(const struct device *dev,
 	uint16_t mask;
 	uint16_t val;
 
-	if (channel_cfg->channel_id < 0 || channel_cfg->channel_id > 7) {
+	if (channel_cfg->channel_id > 7) {
 		LOG_ERR("invalid channel id %d", channel_cfg->channel_id);
 		return -EINVAL;
 	}
@@ -961,7 +946,7 @@ static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_
 		data_in = (int32_t)sys_get_be32(buff);
 		break;
 	default:
-		__ASSERT(false, "Unsupported word length");
+		LOG_ERR("Unsupported word length: %d", wlen);
 		return;
 	}
 
@@ -970,7 +955,7 @@ static void ads131m08_convert_q31(q31_t *out, const uint8_t *buff, uint8_t diff_
 	}
 
 	/* Scale is the number of codes (excluding sign bit in differential) */
-	const uint64_t scale = 1ULL << (resolution - (diff_mode ? 1 : 0));
+	const uint64_t scale = 1ULL << (resolution - (diff_mode ? 1U : 0U));
 	/* Compute Q31 value safely:
 	 * out = (2^(31-adc_shift)) * (Vref / scale) * data_in
 	 * where Vref is in volts; we use mV and divide by 1000 accordingly.
@@ -1402,7 +1387,7 @@ int ads131m08_set_calibration(const struct device *dev, const struct ads131m08_c
 	int ret;
 
 	/* 5 registers per channel: CFG, OCAL_MSB, OCAL_LSB, GCAL_MSB, GCAL_LSB */
-	const uint8_t REGISTERS_PER_CHANNEL = 5;
+	const uint8_t REGISTERS_PER_CHANNEL = 5U;
 	const uint8_t BUFSIZE = ADS131M08_WORDLENGTH_OP + ADS131M08_WORDLENGTH_OP *
 								  REGISTERS_PER_CHANNEL *
 								  ADS131M08_ADC_CHANNELS;
