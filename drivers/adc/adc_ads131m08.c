@@ -457,10 +457,14 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 		k_sem_give(&drv_data->sem_drdy);
 		return;
 	}
-	if (drv_data->active_trigger == ADC_TRIG_DATA_READY) {
+	switch (drv_data->active_trigger) {
+	case ADC_TRIG_DATA_READY:
+		__fallthrough;
+	case ADC_TRIG_FIFO_WATERMARK:
 		need_double_read = drv_data->fifo_needs_drain;
 		ads131m08_stream_irq_handler(drv_data->dev, need_double_read);
-	} else if (drv_data->active_trigger == ADC_TRIG_FIFO_FULL) {
+		break;
+	case ADC_TRIG_FIFO_FULL:
 		/* FIFO_FULL mode: wait for 2 samples, then read both */
 		drv_data->drdy_pending++;
 		if (drv_data->drdy_pending < ADS131M08_FIFO_DEPTH) {
@@ -470,6 +474,10 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 		drv_data->drdy_pending = 0;
 		need_double_read = true;
 		ads131m08_stream_irq_handler(drv_data->dev, need_double_read);
+		break;
+	default:
+		k_sem_give(&drv_data->sem_drdy);
+		return;
 	}
 
 #else
@@ -627,7 +635,7 @@ static int ads131m08_transition_from_continuous(const struct device *dev,
 }
 
 static int ads131m08_transition_from_global_chop(const struct device *dev,
-						  enum ads131m08_functional_mode operation_mode)
+						 enum ads131m08_functional_mode operation_mode)
 {
 	switch (operation_mode) {
 	case ADS131M08_CONTINUOUS_CONVERSION_FM:
