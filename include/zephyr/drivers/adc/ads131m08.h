@@ -29,6 +29,9 @@ extern "C" {
  * @{
  */
 
+/** Number of ADC channels on the ADS131M08 */
+#define ADS131M08_NUM_CHANNELS 8
+
 /**
  * @brief Channel input MUX selection
  */

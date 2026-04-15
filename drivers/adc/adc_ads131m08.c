@@ -193,9 +193,6 @@ LOG_MODULE_REGISTER(adc_ads131m08, CONFIG_ADC_LOG_LEVEL);
 #define ADS131M08_WORDLENGTH_AFTER_RESET 3U /* 24-bit after reset */
 #define ADS131M08_FRAMELENGTH            (ADS131M08_WORDLENGTH_OP * ADS131M08_WORDS_PER_FRAME)
 
-/** Number of ADC channels on the ADS131M08 */
-#define ADS131M08_NUM_CHANNELS 8
-
 /** ADS131M08 device functional modes */
 enum ads131m08_functional_mode {
 	ADS131M08_CONTINUOUS_CONVERSION_FM = 0,
@@ -238,6 +235,8 @@ struct adc_ads131m08_data {
 #endif                                        /* CONFIG_ADS131M08_STREAM */
 };
 
+static int ads131m08_configure_wlen(const struct device *dev);
+
 #ifdef CONFIG_ADS131M08_STREAM
 #include <zephyr/drivers/counter.h>
 
@@ -260,7 +259,6 @@ struct adc_ads131m08_fifo_data {
 } __packed;
 
 static void ads131m08_stream_irq_handler(const struct device *dev, bool double_read);
-static int ads131m08_configure_wlen(const struct device *dev);
 
 #endif /* CONFIG_ADS131M08_STREAM */
 
@@ -490,7 +488,6 @@ static void ads131m08_drdy_callback(const struct device *dev, struct gpio_callba
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
 	const uint8_t *src_bytes;
-	const uint8_t n_ch;
 	int32_t *dst;
 	struct adc_ads131m08_data *data = CONTAINER_OF(ctx, struct adc_ads131m08_data, ctx);
 	uint8_t i = 0;
@@ -508,7 +505,8 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 	__ASSERT(ADS131M08_WORDLENGTH_OP == 4U, "Word length other than 32bit not supported yet");
 	ads131m08_transceive(data->dev, tx_buf, sizeof(tx_buf), rx_buf, sizeof(rx_buf));
 
-	n_ch = POPCOUNT(ctx->sequence.channels);
+	const uint8_t n_ch = POPCOUNT(ctx->sequence.channels);
+
 	dst = ((int32_t *)ctx->sequence.buffer) + ctx->sampling_index * n_ch;
 	src_bytes = &rx_buf[ADS131M08_WORDLENGTH_OP];
 
